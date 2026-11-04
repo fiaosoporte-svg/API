@@ -1,0 +1,17 @@
+{
+  "name": "filo-api",
+  "version": "1.0.0",
+  "description": "API de filo. (SaaS de barberías): capa delgada que valida la sesión y llama a las funciones fn_* de la base",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env src/index.js"
+  },
+  "dependencies": {
+    "cors": "2.8.5",
+    "express": "4.21.2",
+    "pg": "8.13.1"
+  }
+}
