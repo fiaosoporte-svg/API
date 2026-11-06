@@ -124,6 +124,17 @@ r.post('/negocios/:negocio/nequi/pagos', sesion, a(async (req, res) => {
     uno(c, 'fn_registrar_nequi($1::jsonb)', [JSON.stringify({ ...req.body, negocio_id: req.params.negocio, usuario_id: m })])));
 }));
 
+r.get('/negocios/:negocio/nequi/pagos', sesion, a(async (req, res) => {
+  res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_pagos_nequi($1, $2, $3)', [req.params.negocio, m, Number(req.query.limite) || 50])));
+}));
+
+// Vincula este celular a la barbería y a la persona de la sesión: {identificador, nombre}.
+r.post('/negocios/:negocio/dispositivos', sesion, a(async (req, res) => {
+  const { identificador, nombre } = req.body || {};
+  res.json(await comoMiembro(req, (c, m) =>
+    uno(c, 'fn_vincular_dispositivo($1, $2, $3, $4)', [req.params.negocio, m, identificador || '', nombre || null])));
+}));
+
 r.post('/negocios/:negocio/dispositivos/:dispositivo/latido', sesion, a(async (req, res) => {
   await comoMiembro(req, (c) => uno(c, 'fn_latido_dispositivo($1, $2)', [req.params.negocio, req.params.dispositivo]));
   res.status(204).end();

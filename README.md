@@ -34,6 +34,8 @@ Con `codigo = CAMBIAR_CLAVE` la app debe llevar a la pantalla de cambio de contr
 | GET | `/negocios/:negocio/invitaciones/:id/clave` | `fn_clave_dinamica_actual` |
 | DELETE | `/negocios/:negocio/invitaciones/:id` | `fn_revocar_invitacion_dinamica` |
 | POST | `/negocios/:negocio/nequi/pagos` | `fn_registrar_nequi` |
+| GET | `/negocios/:negocio/nequi/pagos` | `fn_pagos_nequi` |
+| POST | `/negocios/:negocio/dispositivos` `{identificador, nombre}` | `fn_vincular_dispositivo` |
 | POST | `/negocios/:negocio/dispositivos/:id/latido` | `fn_latido_dispositivo` |
 | GET | `/plataforma/negocios` | lista de barberías (superadmin) |
 | POST | `/plataforma/negocios` | `fn_plataforma_crear_negocio` (superadmin) |
