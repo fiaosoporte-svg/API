@@ -38,6 +38,12 @@ Con `codigo = CAMBIAR_CLAVE` la app debe llevar a la pantalla de cambio de contr
 | GET | `/plataforma/negocios` | lista de barberías (superadmin) |
 | POST | `/plataforma/negocios` | `fn_plataforma_crear_negocio` (superadmin) |
 | GET | `/plataforma/planes` | planes activos (superadmin) |
+| GET | `/plataforma/catalogo?plan=CODIGO` | `fn_plan_arbol` (superadmin) |
+| PUT | `/plataforma/planes` | `fn_plataforma_guardar_plan` (superadmin) |
+| PUT | `/plataforma/negocios/:negocio/vistas` | `fn_plataforma_vista_negocio` (superadmin) |
+| GET | `/negocios/:negocio/equipo` | `fn_equipo` |
+| GET | `/negocios/:negocio/equipo/:miembro/permisos` | `fn_permisos_de_miembro` (dueño) |
+| PUT | `/negocios/:negocio/equipo/:miembro/permisos` | `fn_fijar_permiso_persona` (dueño) |
 
 ## App
 `flutter run --dart-define=API_URL=https://tu-api.com` usa esta API; sin `API_URL` la app usa datos de ejemplo.

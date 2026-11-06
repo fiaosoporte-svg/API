@@ -74,6 +74,26 @@ r.get('/negocios/:negocio/menu', sesion, a(async (req, res) => {
   res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_menu_de_miembro($1, $2)', [req.params.negocio, m])));
 }));
 
+// ---------------------------------------------------------------- Equipo y permisos por persona (flujos 6 y 7)
+r.get('/negocios/:negocio/equipo', sesion, a(async (req, res) => {
+  res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_equipo($1, $2)', [req.params.negocio, m])));
+}));
+
+r.get('/negocios/:negocio/equipo/:miembro/permisos', sesion, a(async (req, res) => {
+  res.json(await comoMiembro(req, async (c, m) => {
+    await uno(c, "fn_validar_miembro($1, $2, null, array['DUENO'])", [req.params.negocio, m]);
+    return uno(c, 'fn_permisos_de_miembro($1, $2)', [req.params.negocio, req.params.miembro]);
+  }));
+}));
+
+// {tipo: VISTA|ACCION, modulo, codigo, dar: true|false}. Solo el dueño, y solo dentro de lo que tiene la barbería.
+r.put('/negocios/:negocio/equipo/:miembro/permisos', sesion, a(async (req, res) => {
+  const { tipo, modulo, codigo, dar } = req.body || {};
+  await comoMiembro(req, (c, m) => uno(c, 'fn_fijar_permiso_persona($1, $2, $3, $4, $5, $6, $7)',
+    [req.params.negocio, m, req.params.miembro, tipo || '', modulo || '', codigo || '', dar === true]));
+  res.status(204).end();
+}));
+
 // ---------------------------------------------------------------- Equipo: clave dinámica (flujo 7)
 r.post('/unirse', sesion, a(async (req, res) => {
   const resultado = await transaccion(req.cuenta.cuenta_id, (c) =>
@@ -131,6 +151,25 @@ r.get('/plataforma/planes', sesion, soloSuperadmin, a(async (req, res) => {
   res.json(await transaccion(req.cuenta.cuenta_id, async (c) => (await c.query(`
     select codigo, nombre, descripcion, precio_mensual, precio_anual, max_sedes, max_miembros, dias_prueba, dias_gracia
       from plan where activo order by precio_mensual`)).rows));
+}));
+
+// Árbol módulo → vistas → acciones. Con ?plan=CODIGO marca lo que ese plan incluye.
+r.get('/plataforma/catalogo', sesion, soloSuperadmin, a(async (req, res) => {
+  res.json(await transaccion(req.cuenta.cuenta_id, (c) => uno(c, 'fn_plan_arbol($1)', [req.query.plan || null])));
+}));
+
+// Crea o actualiza un plan: {codigo, nombre, precio_mensual, ..., modulos: [{codigo, vistas, acciones}]}.
+r.put('/plataforma/planes', sesion, soloSuperadmin, a(async (req, res) => {
+  res.json(await transaccion(req.cuenta.cuenta_id, (c) =>
+    uno(c, 'fn_plataforma_guardar_plan($1, $2::jsonb)', [req.cuenta.cuenta_id, JSON.stringify(req.body || {})])));
+}));
+
+// Más permisos para el dueño: extras de una barbería por vista. habilitada: true, false o null (restablecer).
+r.put('/plataforma/negocios/:negocio/vistas', sesion, soloSuperadmin, a(async (req, res) => {
+  const { modulo, vista, habilitada, hasta, nota } = req.body || {};
+  await transaccion(req.cuenta.cuenta_id, (c) => uno(c, 'fn_plataforma_vista_negocio($1, $2, $3, $4, $5, $6, $7)',
+    [req.cuenta.cuenta_id, req.params.negocio, modulo || '', vista || '', habilitada ?? null, hasta || null, nota || null]));
+  res.status(204).end();
 }));
 
 module.exports = r;
