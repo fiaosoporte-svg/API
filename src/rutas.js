@@ -113,6 +113,23 @@ r.get('/negocios/:negocio/dashboard', sesion, a(async (req, res) => {
   res.json(await conModulo(req, 'DASHBOARD', (c, m) => uno(c, 'fn_dashboard($1, $2)', [req.params.negocio, m])));
 }));
 
+// Ventas por día de los últimos 60 días: la app arma Hoy, Semana y Mes con sus barras y comparaciones.
+r.get('/negocios/:negocio/ventas', sesion, a(async (req, res) => {
+  res.json(await conModulo(req, 'DASHBOARD', async (c, m) => {
+    // Igual que fn_dashboard: el dinero no es para los barberos.
+    await uno(c, "fn_validar_miembro($1, $2, null, array['DUENO', 'ADMIN', 'RECEPCION'])", [req.params.negocio, m]);
+    return (await c.query(`
+    select dia::text as dia, sum(ventas) as ventas, sum(atenciones) as atenciones
+      from v_resumen_dia
+     where negocio_id = $1 and dia >= fn_dia(now()) - 60
+     group by dia order by dia`, [req.params.negocio])).rows;
+  }));
+}));
+
+r.get('/negocios/:negocio/resumen-voz', sesion, a(async (req, res) => {
+  res.json({ texto: await conModulo(req, 'DASHBOARD', (c, m) => uno(c, 'fn_resumen_voz($1, $2)', [req.params.negocio, m])) });
+}));
+
 // ---------------------------------------------------------------- Registro rápido
 r.post('/negocios/:negocio/atenciones', sesion, a(async (req, res) => {
   const id = await conModulo(req, 'REGISTRO_RAPIDO', (c, m) => uno(c, 'fn_registrar_atencion($1::jsonb)',
