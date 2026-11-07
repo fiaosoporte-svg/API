@@ -32,6 +32,27 @@ const comoMiembro = (req, trabajo) =>
     return trabajo(c, miembro);
   });
 
+/** Igual que comoMiembro, pero exige que la persona tenga hoy el módulo (permiso por persona, flujo 6). */
+const conModulo = (req, modulo, trabajo) =>
+  comoMiembro(req, async (c, m) => {
+    if (!(await uno(c, 'fn_puede($1, $2, $3)', [req.params.negocio, m, modulo]))) {
+      throw new ErrorApi(403, 'No tienes permiso para esta pantalla');
+    }
+    await uno(c, 'fn_validar_miembro($1, $2, null)', [req.params.negocio, m]);
+    return trabajo(c, m);
+  });
+
+// ---------------------------------------------------------------- Registro público de cuentas (flujo 7)
+r.post('/cuentas', a(async (req, res) => {
+  const { nombre, usuario, correo, celular, clave } = req.body || {};
+  if (!usuario || !nombre) throw new ErrorApi(422, 'Escribe tu nombre y tu usuario');
+  // El límite va en su propia transacción: si el registro falla, el intento igual se cuenta.
+  const permitido = await transaccion(null, (c) => uno(c, 'fn_limitar($1, 10, $2::interval)', [`registro:ip:${req.ip}`, '1 hour']));
+  if (!permitido) throw new ErrorApi(429, 'Demasiados registros desde esta conexión: intenta más tarde');
+  await transaccion(null, (c) => uno(c, 'fn_registrar_cuenta($1, $2, $3, $4, $5)', [nombre, correo || '', celular || null, clave || '', usuario]));
+  res.status(201).json({ ok: true, mensaje: 'Cuenta creada. Ya puedes iniciar sesión.' });
+}));
+
 // ---------------------------------------------------------------- Sesión (flujo 2)
 r.post('/sesion', a(async (req, res) => {
   const { usuario, clave, dispositivo } = req.body || {};
@@ -72,6 +93,111 @@ r.get('/negocios', sesion, a(async (req, res) => {
 
 r.get('/negocios/:negocio/menu', sesion, a(async (req, res) => {
   res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_menu_de_miembro($1, $2)', [req.params.negocio, m])));
+}));
+
+// ---------------------------------------------------------------- Datos base de la barbería
+r.get('/negocios/:negocio/datos', sesion, a(async (req, res) => {
+  res.json(await comoMiembro(req, async (c, m) => ({
+    miembro_id: m,
+    sedes: (await c.query('select id, nombre from sede where negocio_id = $1 and activo order by creado_en', [req.params.negocio])).rows,
+    servicios: (await c.query(`select id, nombre, categoria, precio, duracion_min from servicio
+                                where negocio_id = $1 and activo order by categoria, nombre`, [req.params.negocio])).rows,
+    barberos: (await c.query(`select m.id, coalesce(m.nombre_publico, cu.nombre) as nombre
+                                from miembro m join cuenta cu on cu.id = m.cuenta_id
+                               where m.negocio_id = $1 and m.activo and m.atiende_clientes order by 2`, [req.params.negocio])).rows,
+  })));
+}));
+
+// ---------------------------------------------------------------- Inicio
+r.get('/negocios/:negocio/dashboard', sesion, a(async (req, res) => {
+  res.json(await conModulo(req, 'DASHBOARD', (c, m) => uno(c, 'fn_dashboard($1, $2)', [req.params.negocio, m])));
+}));
+
+// ---------------------------------------------------------------- Registro rápido
+r.post('/negocios/:negocio/atenciones', sesion, a(async (req, res) => {
+  const id = await conModulo(req, 'REGISTRO_RAPIDO', (c, m) => uno(c, 'fn_registrar_atencion($1::jsonb)',
+    [JSON.stringify({ ...req.body, negocio_id: req.params.negocio, usuario_id: m })]));
+  res.status(201).json({ id });
+}));
+
+// ---------------------------------------------------------------- Agenda
+r.get('/negocios/:negocio/citas', sesion, a(async (req, res) => {
+  res.json(await conModulo(req, 'AGENDA', async (c) => (await c.query(`
+    select ci.id, ci.inicia_en, ci.termina_en, ci.estado, cl.nombre as cliente, cl.telefono,
+           coalesce(m.nombre_publico, cu.nombre) as barbero, m.id as miembro_id,
+           (select string_agg(s.nombre, ' + ' order by cs.linea) from cita_servicio cs join servicio s on s.id = cs.servicio_id
+             where cs.cita_id = ci.id) as servicios
+      from cita ci
+      join cliente cl on cl.id = ci.cliente_id
+      join miembro m on m.id = ci.miembro_id
+      join cuenta cu on cu.id = m.cuenta_id
+     where ci.negocio_id = $1 and fn_dia(ci.inicia_en) = coalesce($2::date, fn_dia(now()))
+     order by ci.inicia_en`, [req.params.negocio, req.query.dia || null])).rows));
+}));
+
+r.get('/negocios/:negocio/horarios', sesion, a(async (req, res) => {
+  const { sede, miembro, dia, duracion } = req.query;
+  res.json(await conModulo(req, 'AGENDA', async (c) => (await c.query(
+    'select inicia_en, termina_en from fn_horarios_disponibles($1, $2, $3, $4::date, $5::integer)',
+    [req.params.negocio, sede, miembro, dia, duracion || 30])).rows));
+}));
+
+r.post('/negocios/:negocio/citas', sesion, a(async (req, res) => {
+  const id = await conModulo(req, 'AGENDA', (c, m) => uno(c, 'fn_crear_cita($1::jsonb)',
+    [JSON.stringify({ ...req.body, negocio_id: req.params.negocio, usuario_id: m })]));
+  res.status(201).json({ id });
+}));
+
+r.post('/negocios/:negocio/citas/:cita/estado', sesion, a(async (req, res) => {
+  const { estado, motivo } = req.body || {};
+  await conModulo(req, 'AGENDA', (c, m) => uno(c, 'fn_cambiar_estado_cita($1, $2, $3, $4, $5)',
+    [req.params.negocio, m, req.params.cita, estado || '', motivo || null]));
+  res.status(204).end();
+}));
+
+// ---------------------------------------------------------------- Clientes
+r.get('/negocios/:negocio/clientes', sesion, a(async (req, res) => {
+  res.json(await conModulo(req, 'CLIENTES', async (c) => (await c.query(`
+    select id, nombre, telefono, email, ultima_visita, total_visitas, total_gastado
+      from cliente
+     where negocio_id = $1 and activo and ($2::text is null or lower(nombre) like '%' || lower($2) || '%' or telefono like '%' || $2 || '%')
+     order by nombre limit 100`, [req.params.negocio, req.query.q || null])).rows));
+}));
+
+r.post('/negocios/:negocio/clientes', sesion, a(async (req, res) => {
+  const { nombre, telefono, email } = req.body || {};
+  const fila = await conModulo(req, 'CLIENTES', async (c) => (await c.query(
+    'insert into cliente (negocio_id, nombre, telefono, email) values ($1, $2, $3, $4) returning id, nombre, telefono',
+    [req.params.negocio, nombre || '', telefono || null, email || null])).rows[0])
+    .catch((e) => {
+      if (e.code === '23505') throw new ErrorApi(409, 'Ya existe un cliente con ese teléfono');
+      if (e.code === '23514') throw new ErrorApi(422, 'Revisa el nombre, el teléfono y el correo del cliente');
+      throw e;
+    });
+  res.status(201).json(fila);
+}));
+
+// ---------------------------------------------------------------- Mi suscripción y Configuración
+r.get('/negocios/:negocio/suscripcion', sesion, a(async (req, res) => {
+  res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_mi_suscripcion($1, $2)', [req.params.negocio, m])));
+}));
+
+r.get('/negocios/:negocio/configuracion', sesion, a(async (req, res) => {
+  res.json(await conModulo(req, 'CONFIGURACION', async (c) => (await c.query(
+    'select nombre, ciudad, telefono, email as correo, nit, razon_social from negocio where id = $1', [req.params.negocio])).rows[0]));
+}));
+
+r.patch('/negocios/:negocio/configuracion', sesion, a(async (req, res) => {
+  const { nombre, ciudad, telefono, correo, nit, razon_social: razon } = req.body || {};
+  await comoMiembro(req, async (c, m) => {
+    await uno(c, "fn_validar_miembro($1, $2, null, array['DUENO', 'ADMIN'])", [req.params.negocio, m]);
+    await c.query(`update negocio set nombre = $2, ciudad = $3, telefono = $4, email = $5, nit = $6, razon_social = $7 where id = $1`,
+      [req.params.negocio, nombre || '', ciudad || null, telefono || null, correo || null, nit || null, razon || null]);
+  }).catch((e) => {
+    if (e.code === '23514') throw new ErrorApi(422, 'Revisa los datos: nombre, teléfono, correo o NIT no son válidos');
+    throw e;
+  });
+  res.json({ ok: true, mensaje: 'Datos guardados' });
 }));
 
 // ---------------------------------------------------------------- Equipo y permisos por persona (flujos 6 y 7)
@@ -124,6 +250,14 @@ r.post('/negocios/:negocio/nequi/pagos', sesion, a(async (req, res) => {
     uno(c, 'fn_registrar_nequi($1::jsonb)', [JSON.stringify({ ...req.body, negocio_id: req.params.negocio, usuario_id: m })])));
 }));
 
+// accion: VERIFICAR, DESCARTAR o EXCLUIR_PERSONA.
+r.post('/negocios/:negocio/nequi/pagos/:pago/revisar', sesion, a(async (req, res) => {
+  const { accion, nota } = req.body || {};
+  await conModulo(req, 'NEQUI', (c, m) => uno(c, 'fn_revisar_nequi($1, $2, $3, $4, $5)',
+    [req.params.negocio, m, req.params.pago, accion || '', nota || null]));
+  res.status(204).end();
+}));
+
 r.get('/negocios/:negocio/nequi/pagos', sesion, a(async (req, res) => {
   res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_pagos_nequi($1, $2, $3)', [req.params.negocio, m, Number(req.query.limite) || 50])));
 }));
@@ -173,6 +307,20 @@ r.get('/plataforma/catalogo', sesion, soloSuperadmin, a(async (req, res) => {
 r.put('/plataforma/planes', sesion, soloSuperadmin, a(async (req, res) => {
   res.json(await transaccion(req.cuenta.cuenta_id, (c) =>
     uno(c, 'fn_plataforma_guardar_plan($1, $2::jsonb)', [req.cuenta.cuenta_id, JSON.stringify(req.body || {})])));
+}));
+
+// Módulos de una barbería: cuáles tiene hoy. Sirve para darle más al dueño desde el panel.
+r.get('/plataforma/negocios/:negocio/modulos', sesion, soloSuperadmin, a(async (req, res) => {
+  res.json(await transaccion(req.cuenta.cuenta_id, async (c) => (await c.query(`
+    select m.codigo, m.nombre, m.nucleo, m.codigo in (select fn_modulos_habilitados($1)) as habilitado
+      from modulo m where m.activo order by m.orden, m.codigo`, [req.params.negocio])).rows));
+}));
+
+r.put('/plataforma/negocios/:negocio/modulos', sesion, soloSuperadmin, a(async (req, res) => {
+  const { modulo, habilitado } = req.body || {};
+  await transaccion(req.cuenta.cuenta_id, (c) => uno(c, 'fn_plataforma_modulo_negocio($1, $2, $3, $4)',
+    [req.cuenta.cuenta_id, req.params.negocio, modulo || '', habilitado === true]));
+  res.status(204).end();
 }));
 
 // Más permisos para el dueño: extras de una barbería por vista. habilitada: true, false o null (restablecer).
