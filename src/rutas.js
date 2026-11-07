@@ -194,6 +194,36 @@ r.post('/negocios/:negocio/clientes', sesion, a(async (req, res) => {
   res.status(201).json(fila);
 }));
 
+// ---------------------------------------------------------------- Servicios
+const errorServicio = (e) => {
+  if (e.code === '23514') throw new ErrorApi(422, 'Revisa el nombre, el precio y la duración (de 5 a 480 minutos)');
+  throw e;
+};
+
+r.get('/negocios/:negocio/servicios', sesion, a(async (req, res) => {
+  res.json(await conModulo(req, 'SERVICIOS', async (c) => (await c.query(
+    `select id, nombre, categoria, precio, duracion_min, activo from servicio
+      where negocio_id = $1 order by activo desc, categoria, nombre`, [req.params.negocio])).rows));
+}));
+
+r.post('/negocios/:negocio/servicios', sesion, a(async (req, res) => {
+  const { nombre, categoria, precio, duracion_min: duracion } = req.body || {};
+  res.status(201).json(await conModulo(req, 'SERVICIOS', async (c) => (await c.query(
+    `insert into servicio (negocio_id, nombre, categoria, precio, duracion_min)
+     values ($1, $2, $3, $4, $5) returning id`,
+    [req.params.negocio, nombre || '', categoria || 'CORTE', precio ?? 0, duracion || 30])).rows[0]).catch(errorServicio));
+}));
+
+r.patch('/negocios/:negocio/servicios/:servicio', sesion, a(async (req, res) => {
+  const { nombre, categoria, precio, duracion_min: duracion, activo } = req.body || {};
+  await conModulo(req, 'SERVICIOS', (c) => c.query(
+    `update servicio set nombre = $3, categoria = $4, precio = $5, duracion_min = $6, activo = $7
+      where negocio_id = $1 and id = $2`,
+    [req.params.negocio, req.params.servicio, nombre || '', categoria || 'CORTE', precio ?? 0, duracion || 30, activo !== false]))
+    .catch(errorServicio);
+  res.status(204).end();
+}));
+
 // ---------------------------------------------------------------- Mi suscripción y Configuración
 r.get('/negocios/:negocio/suscripcion', sesion, a(async (req, res) => {
   res.json(await comoMiembro(req, (c, m) => uno(c, 'fn_mi_suscripcion($1, $2)', [req.params.negocio, m])));
@@ -324,6 +354,12 @@ r.get('/plataforma/catalogo', sesion, soloSuperadmin, a(async (req, res) => {
 r.put('/plataforma/planes', sesion, soloSuperadmin, a(async (req, res) => {
   res.json(await transaccion(req.cuenta.cuenta_id, (c) =>
     uno(c, 'fn_plataforma_guardar_plan($1, $2::jsonb)', [req.cuenta.cuenta_id, JSON.stringify(req.body || {})])));
+}));
+
+// Contraseña temporal para cualquier cuenta: se devuelve una sola vez.
+r.post('/plataforma/cuentas/restablecer', sesion, soloSuperadmin, a(async (req, res) => {
+  res.json(await transaccion(req.cuenta.cuenta_id, (c) =>
+    uno(c, 'fn_plataforma_restablecer_clave($1, $2)', [req.cuenta.cuenta_id, (req.body || {}).usuario || ''])));
 }));
 
 // Módulos de una barbería: cuáles tiene hoy. Sirve para darle más al dueño desde el panel.
